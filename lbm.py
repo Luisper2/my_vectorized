@@ -24,8 +24,8 @@ class LBM():
 
         self.lattice = np.zeros((self.nx, self.ny)) # Lattice
         
-        self.lattive_u = np.zeros(self.n_velocities, dtype=int) # Lattice X Velocities
-        self.lattive_v = np.zeros(self.n_velocities, dtype=int) # Lattice Y Velocities
+        self.lattice_u = np.zeros(self.n_velocities, dtype=int) # Lattice X Velocities
+        self.lattice_v = np.zeros(self.n_velocities, dtype=int) # Lattice Y Velocities
         # self.ex, self.ey
 
         self.u = self.lattice.copy() # X Velocities
@@ -61,15 +61,15 @@ class LBM():
         self.weight.at[1:5].set(1 / 9)
         self.weight.at[5:].set(1 / 36)
 
-        self.lattive_u = (
-            self.lattive_u
+        self.lattice_u = (
+            self.lattice_u
                 .at[np.array([0,2,4])].set(0)
                 .at[np.array([1,5,8])].set(1)
                 .at[np.array([3,6,7])].set(-1)
         )
 
-        self.lattive_v = (
-            self.lattive_v
+        self.lattice_v = (
+            self.lattice_v
                 .at[np.array([0,1,3])].set(0)
                 .at[np.array([2,5,6])].set(1)
                 .at[np.array([4,7,8])].set(-1)
@@ -88,19 +88,33 @@ class LBM():
     def update_equilibrium_distribution(self):
         unique = self.u ** 2 + self.v ** 2
 
-        u_e = self.u[:, :, np.newaxis] * self.lattive_u[np.newaxis, np.newaxis, :]
-        v_e = self.v[:, :, np.newaxis] * self.lattive_v[np.newaxis, np.newaxis, :]
+        u_e = self.u[:, :, np.newaxis] * self.lattice_u[np.newaxis, np.newaxis, :]
+        v_e = self.v[:, :, np.newaxis] * self.lattice_v[np.newaxis, np.newaxis, :]
 
         feq = (self.density[:, :, np.newaxis] * self.weight[np.newaxis, np.newaxis, :]) * (
                 1.0 + 3.0 * (u_e + v_e) + 4.5 * (u_e + v_e) ** 2 - 1.5 * unique[:, :, np.newaxis]
         )
 
-        # Assign the result to self.feq
         self.feq = feq.transpose(2,0,1)
+
+    def compute_collisions(self):
+        self.F = self.F - (self.F - self.feq) / self.tau
+
+    def compute_streaming(self):
+        def shift_layer(f_k, du, dv):
+            return np.roll(np.roll(f_k, du, axis=0), dv, axis=1)
+        
+        self.F = jax.vmap(shift_layer, in_axes=(0, 0, 0))(
+            self.F,
+            self.lattice_u,
+            self.lattice_v
+        )
 
     def run(self, steps = 1000, save = 10):
         for iter in tqdm(range(steps)):
             simulation.update_equilibrium_distribution()
+            simulation.compute_collisions()
+            simulation.compute_streaming()
 
 if __name__ == '__main__':
     jax.config.update("jax_enable_x64", True)
