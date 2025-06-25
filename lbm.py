@@ -23,14 +23,33 @@ class LBM():
         self.weight = np.zeros(self.nv)  # Weight
         self.bounce = np.zeros(self.nv, dtype=int) # Bounce
 
-        self.F = np.ones((self.ny, self.nx, self.nv)) + 0.01 * jr.normal(jr.PRNGKey(0), (self.ny, self.nx, self.nv))
+        self.vx = np.zeros(self.nv, dtype=int)
+        self.vy = np.zeros(self.nv, dtype=int)
 
-        self.D2()
+        self.F = np.zeros((self.nv, self.nx, self.ny))
+        self.Feq = self.F.copy()
+        self.Ferr = self.F.copy()
 
-    def D2(self):
-        self.weight = np.array([4/9, 1/9, 1/36, 1/9, 1/36, 1/9, 1/36, 1/9, 1/36])
+        self.boundary = np.zeros((self.nx, self.ny))
+        
+        # self.F = np.ones((self.ny, self.nx, self.nv)) + 0.01 * jr.normal(jr.PRNGKey(0), (self.ny, self.nx, self.nv))
 
-        # self.bounce = np.array([9, 5, 4, 1, 2, ])
+        self.__init_D2Q9__()
+
+    def __init_D2Q9__(self):
+        self.weight[0] = 4 / 9
+        self.weight[1:5] = 1 / 9
+        self.weight[5:] = 1 / 36
+
+        self.vx[[0, 2, 4]] = 0
+        self.vx[[1, 5, 8]] = 1
+        self.vx[[3, 6, 7]] = -1
+
+        self.vy[[0, 1, 3]] = 0
+        self.vy[[2, 5, 6]] = 1
+        self.vy[[4, 7, 8]] = -1
+
+        self.bounce = [0, 3, 4, 1, 2, 7, 8, 5, 6]
 
 if __name__ == '__main__':
     simulation = LBM()
