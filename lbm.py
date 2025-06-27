@@ -8,12 +8,14 @@ from tqdm import tqdm
 os.system('cls' if os.name == 'nt' else 'clear')
 
 class LBM():
-    def __init__(self, nx, ny, tau = 1, u0 = 0.1, perturbations = False):
+    def __init__(self, nx, ny, tau = 1.225, u0 = 0, v0 = 0, perturbations = False):
         self.nx = nx # Width
         self.ny = ny # Height
 
         self.tau = tau  # Kinematic Viscosity (Collision)
-        self.u0 = u0 # Initial Velocity
+        
+        self.u0 = u0 # Initial X Velocity
+        self.v0 = v0 # Initial Y Velocity
 
         self.n_velocities = 9 # Number of Velocities
 
@@ -111,15 +113,15 @@ class LBM():
         )
 
     def run(self, steps = 1000, save = 10):
+        jax.config.update("jax_enable_x64", True)
+
         for iter in tqdm(range(steps)):
             simulation.update_equilibrium_distribution()
             simulation.compute_collisions()
             simulation.compute_streaming()
 
 if __name__ == '__main__':
-    jax.config.update("jax_enable_x64", True)
-
-    simulation = LBM(400, 100)
+    simulation = LBM(400, 100, u0 = 1)
     simulation.run(10000, 10)
 
     cylinder_cx = 400 // 5
