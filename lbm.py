@@ -1,6 +1,6 @@
 import os
-
 import jax
+import pickle
 import jax.numpy as np
 import jax.random as jr
 from tqdm import tqdm
@@ -103,22 +103,112 @@ class LBM():
         self.F = self.F - (self.F - self.feq) / self.tau
 
     def compute_streaming(self):
-        def shift_layer(f_k, du, dv):
-            return np.roll(np.roll(f_k, du, axis=0), dv, axis=1)
+        def shift_channel(fk, shift):
+            return np.roll(np.roll(fk, shift[0], axis=0), shift[1], axis=1)
+
+        shifts = np.stack([self.lattice_u, self.lattice_v], axis=1)
+
+        self.F = jax.vmap(shift_channel, in_axes=(0, 0))(self.F, shifts)
+
+    def compute_bounceback_bc(self, direction: str):
+        dict_pre = {
+            'left':  np.array([3, 6, 7]),
+            'right': np.array([1, 5, 8]),
+            'up':    np.array([2, 5, 6]),
+            'down':  np.array([4, 7, 8]),
+        }
+
+        pre_ks = dict_pre[direction]
+        post_ks = np.array(self.bounce)[pre_ks]
+
+        if direction in ('down', 'up'):
+            i_idx = np.arange(1, self.nx + 1)
+            j_idx = 1 if direction == 'down' else self.ny
         
-        self.F = jax.vmap(shift_layer, in_axes=(0, 0, 0))(
-            self.F,
-            self.lattice_u,
-            self.lattice_v
-        )
+            ks = pre_ks[:, None]
+            xs = i_idx[None, :]
+            ys = j_idx
+        else:
+            i_idx = 1 if direction == 'left' else self.nx
+            j_idx = np.arange(1, self.ny + 1)
+            
+            ks = pre_ks[:, None]
+            xs = i_idx
+            ys = j_idx[None, :]
+
+        vals = self.cache[ks, xs, ys]
+        
+        self.F = self.F.at[(post_ks[:, None], xs, ys)].set(vals)
+
+    def compute_neumann_bc(self):
+        k_inx = np.array([2, 5, 6])
+
+        i_idx = np.arange(1, self.nx + 1)
+        j = self.ny
+
+        utop = (self.u0 / 2.0 * (1.0 + np.sin(2.0 * np.pi / self.nx * (i_idx - 0.5) - np.pi / 2.0)))
+        vtop = (self.v0 / 2.0 * (1.0 + np.cos(2.0 * np.pi / self.nx * (i_idx - 0.5))))
+
+        ftemp_sel = self.cache[k_inx[:, None], i_idx[None, :], j]
+        rho_sel = self.density[i_idx, j]
+        ex_sel = self.lattice_u[k_inx][:, None]
+        ey_sel = self.lattice_v[k_inx][:, None]
+        wt_sel = self.weight[k_inx][:, None]
+
+        correction = 6.0 * wt_sel * rho_sel * (ex_sel * utop + ey_sel * vtop)
+        delta = ftemp_sel - correction
+
+        self.F = self.F.at[k_inx[:, None], i_idx[None, :], j].set(delta)
+
+    def compute_distribution_error(self):
+        self.Ferr = np.abs(self.F - self.cache)
+
+    def compute_macroscopic_variables(self):
+        rho = np.sum(self.F, axis=0)
+        u_raw = np.tensordot(self.lattice_u, self.F, axes=(0, 0))
+        v_raw = np.tensordot(self.lattice_v, self.F, axes=(0, 0))
+
+        mask = rho > 1e-8
+        
+        u = np.where(mask, u_raw / rho, 0.0)
+        v = np.where(mask, v_raw / rho, 0.0)
+
+        def neumann_extrap(arr):
+            arr = arr.at[0, :].set(2*arr[1, :] - arr[2, :])
+            arr = arr.at[-1, :].set(2*arr[-2, :] - arr[-3, :])
+            arr = arr.at[:, 0].set(2*arr[:, 1] - arr[:, 2])
+            arr = arr.at[:, -1].set(2*arr[:, -2] - arr[:, -3])
+        
+            return arr
+
+        self.density = neumann_extrap(rho)
+        self.u = neumann_extrap(u)
+        self.v = neumann_extrap(v)
+
+    def save(self, iteration):
+        filename = f'./data/{iteration:07d}.pkl'
+        
+        with open(filename, "wb") as f:
+            pickle.dump((self.x, self.y, self.u, self.v, self.density), f)
 
     def run(self, steps = 1000, save = 10):
         jax.config.update("jax_enable_x64", True)
 
+        os.makedirs(os.path.dirname('./data/'), exist_ok=True)
+        
         for iter in tqdm(range(steps)):
             simulation.update_equilibrium_distribution()
             simulation.compute_collisions()
             simulation.compute_streaming()
+            simulation.compute_bounceback_bc('down')
+            simulation.compute_bounceback_bc('left')
+            simulation.compute_bounceback_bc('right')
+            simulation.compute_neumann_bc()
+            simulation.compute_distribution_error()
+            simulation.compute_macroscopic_variables() 
+
+            if iter % save == 0:
+                simulation.save(iter)
 
 if __name__ == '__main__':
     simulation = LBM(400, 100, u0 = 1)
