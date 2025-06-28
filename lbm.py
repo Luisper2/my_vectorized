@@ -33,10 +33,10 @@ class LMB:
         self.f = jnp.zeros((self.num_vel, nx+2, ny+2))
 
         # set solid boundaries (ghost nodes)
-        self.lattice = self.lattice.at[:,0].set(1)
-        self.lattice = self.lattice.at[:,-1].set(1)
-        self.lattice = self.lattice.at[0,:-1].set(1)
-        self.lattice = self.lattice.at[-1,:-1].set(1)
+        # self.lattice = self.lattice.at[:,0].set(1)
+        # self.lattice = self.lattice.at[:,-1].set(1)
+        # self.lattice = self.lattice.at[0,:-1].set(1)
+        # self.lattice = self.lattice.at[-1,:-1].set(1)
 
     @partial(jax.jit, static_argnums=0)
     def compute_equilibrium(self, rho, u, v):
@@ -124,6 +124,6 @@ class LMB:
 
 if __name__ == '__main__':
     lbm = LMB(nx=100, ny=100, tau=1.0, u0=0.1)
-    lbm.run(num_steps=5000, save_step=10, output_dir='./data')
+    lbm.run(num_steps=5000, save_step=10, output_dir='./data2')
     
     print('Done')
