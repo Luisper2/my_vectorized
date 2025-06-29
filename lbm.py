@@ -33,10 +33,10 @@ class LMB:
         self.f = jnp.zeros((self.num_vel, nx+2, ny+2))
 
         # set solid boundaries (ghost nodes)
-        # self.lattice = self.lattice.at[:,0].set(1)
-        # self.lattice = self.lattice.at[:,-1].set(1)
-        # self.lattice = self.lattice.at[0,:-1].set(1)
-        # self.lattice = self.lattice.at[-1,:-1].set(1)
+        self.lattice = self.lattice.at[:,0].set(1)
+        self.lattice = self.lattice.at[:,-1].set(1)
+        self.lattice = self.lattice.at[0,:-1].set(1)
+        self.lattice = self.lattice.at[-1,:-1].set(1)
 
     @partial(jax.jit, static_argnums=0)
     def compute_equilibrium(self, rho, u, v):
@@ -114,7 +114,7 @@ class LMB:
             f, rho, u, v = self.step(f, rho, u, v)
         
             if it % save_step == 0:
-                filename = f'{output_dir}/{it:07d}.pkl'
+                filename = f'{output_dir}/{it:07d}.dat'
                 
                 with open(filename, 'wb') as fp:
                     pickle.dump((np.array(self.x), np.array(self.y), np.array(u), np.array(v), np.array(rho)), fp)
