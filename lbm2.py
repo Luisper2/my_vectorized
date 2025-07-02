@@ -18,7 +18,7 @@ class lbm:
     def D2Q9(self):
         self.dirs = 9
 
-        self.x, self.y = jnp.meshgrid(jnp.arange(self.nx), jnp.arange(self.ny))
+        self.x, self.y = jnp.meshgrid(jnp.arange(self.nx), jnp.arange(self.ny), indexing='ij')
         
         self.weight = jnp.array([4/9] + [1/9]*4 + [1/36]*4)
         self.ex = jnp.array([0,1,0,-1,0,1,-1,-1,1], dtype=jnp.int32)

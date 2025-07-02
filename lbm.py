@@ -13,34 +13,30 @@ class LMB:
         self.u0 = u0
         self.num_vel = 9
 
-        # create meshgrid for coordinates (ghost nodes included)
         xv, yv = jnp.meshgrid(jnp.arange(nx+2) - 0.5, jnp.arange(ny+2) - 0.5, indexing='ij')
         self.x = xv
         self.y = yv
 
-        # lattice weights and directions
         self.wt = jnp.array([4/9] + [1/9]*4 + [1/36]*4)
         self.ex = jnp.array([0,1,0,-1,0,1,-1,-1,1], dtype=jnp.int32)
         self.ey = jnp.array([0,0,1,0,-1,1,1,-1,-1], dtype=jnp.int32)
         self.bounce_back = jnp.array([0,3,4,1,2,7,8,5,6], dtype=jnp.int32)
 
-        # fields
         shape = (nx+2, ny+2)
+        
         self.u = jnp.zeros(shape)
         self.v = jnp.zeros(shape)
         self.rho = jnp.ones(shape)
         self.lattice = jnp.zeros(shape)
         self.f = jnp.zeros((self.num_vel, nx+2, ny+2))
 
-        # set solid boundaries (ghost nodes)
         self.lattice = self.lattice.at[:,0].set(1)
-        self.lattice = self.lattice.at[:,-1].set(1)
+        # self.lattice = self.lattice.at[:,-1].set(1)
         self.lattice = self.lattice.at[0,:-1].set(1)
         self.lattice = self.lattice.at[-1,:-1].set(1)
 
     @partial(jax.jit, static_argnums=0)
     def compute_equilibrium(self, rho, u, v):
-        # calculate equilibrium distribution and transpose to (num_vel, nx+2, ny+2)
         cu = (u[..., None] * self.ex) + (v[..., None] * self.ey)
         usq = u**2 + v**2
         feq = (rho[..., None] * self.wt[None, None, :]) * (
