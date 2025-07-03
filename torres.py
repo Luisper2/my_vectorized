@@ -61,26 +61,16 @@ class LBM():
     def update_equilibrium_distribution(self):
         usq = self.u ** 2 + self.v ** 2  # Element-wise square of u and v
         # Pre-compute the velocity components in x and y directions
-
-        # 102, 102
-
         ue = self.u[:, :, np.newaxis] * self.ex[np.newaxis, np.newaxis, :]  # Broadcasting for u * ex
         ve = self.v[:, :, np.newaxis] * self.ey[np.newaxis, np.newaxis, :]  # Broadcasting for v * ey
-
-        # 102, 102, 9
-        # 102, 102, 9
 
         # Calculate equilibrium distribution function using vectorized operations
         feq = (self.density[:, :, np.newaxis] * self.wt[np.newaxis, np.newaxis, :]) * (
                 1.0 + 3.0 * (ue + ve) + 4.5 * (ue + ve) ** 2 - 1.5 * usq[:, :, np.newaxis]
         )
-        
-        # 102, 102, 9
 
         # Assign the result to self.feq
         self.feq = feq.transpose(2,0,1)
-
-        # 9, 102, 102
 
     def compute_collisions(self):
         self.f = self.f - (self.f - self.feq) / self.tau
@@ -176,9 +166,9 @@ class LBM():
         self.v[indices_lhs] = 2 * self.v[indices_rhs1] - self.v[indices_rhs2]
         self.density[indices_lhs] = 2 * self.density[indices_rhs1] - self.density[indices_rhs2]
 
-    def write_output(self, iteration):
+    def write_output(self, iteration, dir):
         # Generate filename with leading zeros (7-digit format)
-        filename = f"{iteration:07d}.pkl"
+        filename = f"{dir}/{iteration:07d}.pkl"
         # Save data
         with open(filename, "wb") as f:
             pickle.dump((self.x, self.y, self.u, self.v, self.density), f)
@@ -239,7 +229,11 @@ class LBM():
 
             np.savetxt(filename, data, fmt="%.6f", delimiter=" ", header=header, comments='')
 
-    def run_num_steps(self, num_steps, save_step):
+    def run_num_steps(self, num_steps, save_step, dir):
+        import os
+
+        os.makedirs(dir, exist_ok=True)
+
         for iter in tqdm(range(num_steps)):
             lbm.update_equilibrium_distribution()
             lbm.compute_collisions()
@@ -251,12 +245,12 @@ class LBM():
             lbm.compute_distribution_error()
             lbm.compute_macroscopic_variables()
             if iter % save_step == 0:
-                lbm.write_output_dat(iter)
+                # lbm.write_output_dat(iter)
                 # lbm.write_output_f(iter)
                 # lbm.write_output_f_eq(iter)
-                lbm.write_output(iter)
+                lbm.write_output(iter, dir)
 
 
 if __name__ == '__main__':
-    lbm = LBM(100, 100)
-    lbm.run_num_steps(10000, 10)
+    lbm = LBM(100, 100, tau=1)
+    lbm.run_num_steps(10001, 100, './data8')

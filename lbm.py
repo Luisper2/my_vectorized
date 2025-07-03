@@ -55,12 +55,21 @@ class LBM():
     # ------------------------------------------------------
     @partial(jax.jit, static_argnums=0)
     def compute_equilibrium(self, density, u, v):
+        """
+            fᵢᵉ = ρ Wᵢ (1 + 3 cᵢ ⋅ u + 9/2 (cᵢ ⋅ u)² - 3/2 ||u||₂²)
+
+            fᵢᵉ : Equilibrium discrete velocities
+            ρ   : Density
+            cᵢ  : Lattice Velocities
+            Wᵢ  : Lattice Weights
+        """
         usq = u**2 + v**2                                # squared speed field
         cu  = (u[None] * self.ex[:,None,None] +
                v[None] * self.ey[:,None,None])          # dot product e_i · u
         feq = density[None] * self.wt[:,None,None] * (
               1 + 3*cu + 4.5*cu**2 - 1.5*usq[None]
         )
+
         return feq
 
     # ------------------------------------------------------
@@ -68,6 +77,15 @@ class LBM():
     # ------------------------------------------------------
     @partial(jax.jit, static_argnums=0)
     def collide(self, f, feq):
+        """
+            Bhatnagar-Gross-Krook
+            
+            fᵢ = fᵢ - ω (fᵢ - fᵢᵉ)
+
+            fᵢ  : Discrete velocities
+            fᵢᵉ : Equilibrium discrete velocities
+            ω   : Relaxation factor
+        """
         # Relaxation towards equilibrium
         return f - (f - feq) / self.tau
 
@@ -191,9 +209,9 @@ if __name__ == '__main__':
     ny = 100
 
     reynolds = 100
-    velocity = 0.01
+    velocity = 0.1
 
-    sim = LBM(nx, ny, u0 = velocity, tau = velocity * nx / velocity)
-    sim.run(10000, 10, './data6')
+    sim = LBM(nx, ny, u0 = velocity)
+    sim.run(10000, 10, './data_paper')
 
     print(f'Done ({(time.perf_counter() - start):.3f}s)')
