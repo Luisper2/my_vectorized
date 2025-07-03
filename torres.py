@@ -259,4 +259,4 @@ class LBM():
 
 if __name__ == '__main__':
     lbm = LBM(100, 100)
-    lbm.run_num_steps(1, 10)
+    lbm.run_num_steps(10000, 10)

@@ -157,7 +157,7 @@ import matplotlib.pyplot as plt
 import cmasher as cmr
 from tqdm import tqdm
 
-N_ITERATIONS = 1
+N_ITERATIONS = 15_000
 REYNOLDS_NUMBER = 80
 
 N_POINTS_X = 300
@@ -169,7 +169,7 @@ CYLINDER_RADIUS_INDICES = N_POINTS_Y // 9
 
 MAX_HORIZONTAL_INFLOW_VELOCITY = 0.04
 
-VISUALIZE = False
+VISUALIZE = True
 PLOT_EVERY_N_STEPS = 100
 SKIP_FIRST_N_ITERATIONS = 0
 
@@ -232,13 +232,11 @@ def get_equilibrium_discrete_velocities(macroscopic_velocities, density):
         LATTICE_VELOCITIES,
         macroscopic_velocities,
     )
-
     macroscopic_velocity_magnitude = jnp.linalg.norm(
         macroscopic_velocities,
         axis=-1,
         ord=2,
     )
-
     equilibrium_discrete_velocities = (
         density[..., jnp.newaxis]
         *
@@ -289,7 +287,7 @@ def main():
     # Obstacle Mask: An array of the shape like X or Y, but contains True if the
     # point belongs to the obstacle and False if not
     obstacle_mask = ()
-    
+
     (
         jnp.sqrt(
             (
@@ -309,7 +307,7 @@ def main():
     )
 
     velocity_profile = jnp.zeros((N_POINTS_X, N_POINTS_Y, 2))
-    velocity_profile = velocity_profile.at[0, :, 0].set(MAX_HORIZONTAL_INFLOW_VELOCITY)
+    velocity_profile = velocity_profile.at[:, :, 0].set(MAX_HORIZONTAL_INFLOW_VELOCITY)
 
     @jax.jit
     def update(discrete_velocities_prev):
@@ -329,10 +327,6 @@ def main():
         macroscopic_velocities_prev =\
             macroscopic_velocities_prev.at[0, 1:-1, :].set(
                 velocity_profile[0, 1:-1, :]
-            )
-        macroscopic_velocities_prev =\
-            macroscopic_velocities_prev.at[0, 1:-1, :].set(
-                velocity_profile[-1, 1:-1, :]
             )
         density_prev = density_prev.at[0, :].set(
             (
@@ -393,6 +387,7 @@ def main():
             )
         
         return discrete_velocities_streamed
+
 
     discrete_velocities_prev = get_equilibrium_discrete_velocities(
         velocity_profile,

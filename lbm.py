@@ -1,125 +1,199 @@
 import os
 import jax
-import pickle
-import numpy as np
+import time
 from tqdm import tqdm
 import jax.numpy as jnp
 from functools import partial
 
-class LMB:
+class LBM():
     def __init__(self, nx, ny, tau=1.0, u0=0.1):
-        self.nx, self.ny = nx, ny
+        self.nx = nx
+        self.ny = ny
         self.tau = tau
         self.u0 = u0
-        self.num_vel = 9
+        self.Q = 9
 
-        xv, yv = jnp.meshgrid(jnp.arange(nx+2) - 0.5, jnp.arange(ny+2) - 0.5, indexing='ij')
-        self.x = xv
-        self.y = yv
-
-        self.wt = jnp.array([4/9] + [1/9]*4 + [1/36]*4)
-        self.ex = jnp.array([0,1,0,-1,0,1,-1,-1,1], dtype=jnp.int32)
-        self.ey = jnp.array([0,0,1,0,-1,1,1,-1,-1], dtype=jnp.int32)
+        # --------------------------------------------------
+        # 1) Constantes de D2Q9
+        # --------------------------------------------------
+        # Pesos
+        self.wt = jnp.array([4/9] + [1/9]*4 + [1/36]*4, dtype=jnp.float32)
+        # Velocidades discretas (ex, ey)
+        self.ex = jnp.array([0, 1, 0, -1, 0, 1, -1, -1, 1], dtype=jnp.int32)
+        self.ey = jnp.array([0, 0, 1,  0, -1, 1,  1, -1,-1], dtype=jnp.int32)
+        # Mapeo “opuesto” para bounce-back
         self.bounce_back = jnp.array([0,3,4,1,2,7,8,5,6], dtype=jnp.int32)
 
-        shape = (nx+2, ny+2)
-        
-        self.u = jnp.zeros(shape)
-        self.v = jnp.zeros(shape)
-        self.rho = jnp.ones(shape)
-        self.lattice = jnp.zeros(shape)
-        self.f = jnp.zeros((self.num_vel, nx+2, ny+2))
-
-        self.lattice = self.lattice.at[:,0].set(1)
-        # self.lattice = self.lattice.at[:,-1].set(1)
-        self.lattice = self.lattice.at[0,:-1].set(1)
-        self.lattice = self.lattice.at[-1,:-1].set(1)
-
-    @partial(jax.jit, static_argnums=0)
-    def compute_equilibrium(self, rho, u, v):
-        cu = (u[..., None] * self.ex) + (v[..., None] * self.ey)
-        usq = u**2 + v**2
-        feq = (rho[..., None] * self.wt[None, None, :]) * (
-            1 + 3 * cu + 4.5 * cu**2 - 1.5 * usq[..., None]
+        # --------------------------------------------------
+        # 2) Coordenadas físicas (incluyendo ghost nodes)
+        # --------------------------------------------------
+        # Dominio: i=0..nx+1, j=0..ny+1
+        self.x, self.y = jnp.meshgrid(
+            jnp.arange(nx+2, dtype=jnp.float32) - 0.5,
+            jnp.arange(ny+2, dtype=jnp.float32) - 0.5,
+            indexing='ij'
         )
-        
-        return jnp.transpose(feq, (2, 0, 1))
 
+        # --------------------------------------------------
+        # 3) Campos macroscópicos
+        # --------------------------------------------------
+        shape = (nx+2, ny+2)
+        self.u       = jnp.zeros(shape, dtype=jnp.float32)
+        self.v       = jnp.zeros(shape, dtype=jnp.float32)
+        self.density = jnp.ones(shape,  dtype=jnp.float32)
+
+        # --------------------------------------------------
+        # 4) Distribución inicial en equilibrio (reposo)
+        # --------------------------------------------------
+        # f[k,i,j] for k=0..8, i=0..nx+1, j=0..ny+1
+        feq0 = (self.density[None, :, :] * self.wt[:, None, None])
+        self.f = feq0.copy()                  # estado inicial
+        self.ferr = jnp.zeros_like(self.f)    # error de distribución
+
+    # ------------------------------------------------------
+    # 5) Equilibrio de Maxwell-Boltzmann discreto
+    # ------------------------------------------------------
+    @partial(jax.jit, static_argnums=0)
+    def compute_equilibrium(self, density, u, v):
+        usq = u**2 + v**2                                # (nx+2,ny+2)
+        cu  = (u[None] * self.ex[:,None,None] +
+               v[None] * self.ey[:,None,None])          # (9,nx+2,ny+2)
+        feq = density[None] * self.wt[:,None,None] * (
+              1 + 3*cu + 4.5*cu**2 - 1.5*usq[None]
+        )
+        return feq
+
+    # ------------------------------------------------------
+    # 6) Colisión BGK
+    # ------------------------------------------------------
     @partial(jax.jit, static_argnums=0)
     def collide(self, f, feq):
         return f - (f - feq) / self.tau
 
+    # ------------------------------------------------------
+    # 7) Streaming puro (sin efectos colaterales)
+    # ------------------------------------------------------
     @partial(jax.jit, static_argnums=0)
     def stream(self, f):
-        def shift(fk, ex, ey):
-            return jnp.roll(jnp.roll(fk, ex, axis=0), ey, axis=1)
-        
-        return jnp.stack([shift(f[k], self.ex[k], self.ey[k]) for k in range(self.num_vel)])
+        ftemp = f
+        # desplaza cada componente según (ex,ey)
+        def shift_fk(fk, dx, dy):
+            return jnp.roll(jnp.roll(fk, dx, axis=0), dy, axis=1)
 
-    @partial(jax.jit, static_argnums=0)
-    def apply_bounce_back(self, f):
-        def bb(fk, bk):
-            return jnp.where(self.lattice > 0, f[bk], fk)
-        
-        return jnp.stack([bb(f[k], self.bounce_back[k]) for k in range(self.num_vel)])
+        f_stream = jnp.stack([
+            shift_fk(f[k], self.ex[k], self.ey[k])
+            for k in range(self.Q)
+        ], axis=0)
+        return f_stream, ftemp
 
+    # ------------------------------------------------------
+    # 8) Bounce-back en los 4 bordes (no‐slip)
+    # ------------------------------------------------------
     @partial(jax.jit, static_argnums=0)
-    def apply_neumann_bc(self, f):
-        j = self.ny
-        k_idx = jnp.array([2, 5, 6], dtype=jnp.int32)
-        x_idx = jnp.arange(1, self.nx + 1)
-        utop = self.u0 / 2 * (1 + jnp.sin(2 * jnp.pi / self.nx * (x_idx - 0.5) - jnp.pi / 2))
-        bb_idx = self.bounce_back[k_idx]
-        rho_slice = f.sum(axis=0)[1:self.nx+1, j]
-        term = 6 * self.wt[k_idx][:, None] * rho_slice[None, :] * self.ex[k_idx][:, None] * utop[None, :]
-        f = f.at[k_idx, 1:self.nx+1, j].set(
-            f[bb_idx, 1:self.nx+1, j] - term
-        )
+    def apply_bounce_back(self, f, ftemp):
+        """
+        f[k, i,    0 ] = ftemp[opp[k], i,    1 ]
+        f[k, i, ny+1] = ftemp[opp[k], i, ny   ]
+        f[k,    0, j] = ftemp[opp[k], 1,    j]
+        f[k, nx+1, j] = ftemp[opp[k], nx,   j]
+        """
+        k_all = jnp.arange(self.Q)
+        i = jnp.arange(1, self.nx+1)
+        j = jnp.arange(1, self.ny+1)
+
+        # bottom (j=0)
+        K,I = jnp.meshgrid(k_all, i, indexing='ij')
+        f = f.at[K, I, 0].set(ftemp[self.bounce_back[K], I, 1])
+
+        # top (j=ny+1)
+        f = f.at[K, I, self.ny+1].set(ftemp[self.bounce_back[K], I, self.ny])
+
+        # left (i=0)
+        J = jnp.arange(1, self.ny+1)
+        K,J2 = jnp.meshgrid(k_all, J, indexing='ij')
+        f = f.at[K, 0, J2].set(ftemp[self.bounce_back[K], 1, J2])
+
+        # right (i=nx+1)
+        f = f.at[K, self.nx+1, J2].set(ftemp[self.bounce_back[K], self.nx, J2])
+
         return f
 
+    # ------------------------------------------------------
+    # 9) Neumann BC (borde superior)
+    # ------------------------------------------------------
     @partial(jax.jit, static_argnums=0)
-    def macroscopic(self, f):
-        rho = jnp.sum(f, axis=0)
-        u = jnp.sum(f * self.ex[:, None, None], axis=0) / rho
-        v = jnp.sum(f * self.ey[:, None, None], axis=0) / rho
-        
-        u = u.at[0, :].set(2 * u[1, :] - u[2, :]).at[-1, :].set(2 * u[-2, :] - u[-3, :])
-        u = u.at[:, 0].set(2 * u[:, 1] - u[:, 2]).at[:, -1].set(2 * u[:, -2] - u[:, -3])
-        v = v.at[0, :].set(2 * v[1, :] - v[2, :]).at[-1, :].set(2 * v[-2, :] - v[-3, :])
-        v = v.at[:, 0].set(2 * v[:, 1] - v[:, 2]).at[:, -1].set(2 * v[:, -2] - v[:, -3])
-        return rho, u, v
+    def compute_neumann_bc(self, f, ftemp, density):
+        # solo para k=2,5,6 en j=ny+1
+        k_inx = jnp.array([2,5,6], dtype=jnp.int32)
+        i_arr = jnp.arange(1, self.nx+1, dtype=jnp.int32)
+        # Índices 2D (K x i)
+        K, I = jnp.meshgrid(k_inx, i_arr, indexing='ij')
+        j = self.ny
 
-    def step(self, f, rho, u, v):
-        feq = self.compute_equilibrium(rho, u, v)
-        f = self.collide(f, feq)
-        f = self.stream(f)
-        f = self.apply_bounce_back(f)
-        f = self.apply_neumann_bc(f)
-        rho, u, v = self.macroscopic(f)
-        
-        return f, rho, u, v
+        term    = 6 * self.wt[K] * density[I,j] * self.ex[K] * self.u0
+        new_vals= ftemp[K, I, j] - term
+        bb      = self.bounce_back[K]
+        # re-asignamos en la capa interior (j=ny)
+        f = f.at[bb, I, j].set(new_vals)
+        return f
 
-    def run(self, num_steps, save_step, output_dir='./data'):
+    # ------------------------------------------------------
+    # 10) Cálculo de variables macroscópicas
+    # ------------------------------------------------------
+    @partial(jax.jit, static_argnums=0)
+    def compute_macroscopic_variables(self, f):
+        density = jnp.sum(f, axis=0)
+        nonzero = density > 1e-8
+
+        u = jnp.sum(f * self.ex[:,None,None], axis=0) / jnp.where(nonzero, density, 1.0)
+        v = jnp.sum(f * self.ey[:,None,None], axis=0) / jnp.where(nonzero, density, 1.0)
+        u = jnp.where(nonzero, u, 0.0)
+        v = jnp.where(nonzero, v, 0.0)
+
+        # Condiciones de contorno lineales (bordes)
+        # Reutiliza el mismo esquema de “espejo” que tu versión NumPy
+        # ... Aquí podrías copiar tu función compute_macroscopic_variables_boundaries …
+        return density, u, v
+
+    # ------------------------------------------------------
+    # 11) Un solo paso de LBM: puro y jitteado
+    # ------------------------------------------------------
+    @partial(jax.jit, static_argnums=0)
+    def step(self, f, density, u, v):
+        feq    = self.compute_equilibrium(density, u, v)
+        fcol   = self.collide(f, feq)
+        fstr, ftemp = self.stream(fcol)
+        fbb    = self.apply_bounce_back(fstr, ftemp)
+        fneu   = self.compute_neumann_bc(fbb, ftemp, density)
+        rho, u, v = self.compute_macroscopic_variables(fneu)
+        return fneu, rho, u, v
+
+    # ------------------------------------------------------
+    # 12) Loop de ejecución y guardado de frames
+    # ------------------------------------------------------
+    def run(self, steps, save, dir='./data'):
         os.system('cls')
 
-        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(dir, exist_ok=True)
+        f, rho, u, v = self.f, self.density, self.u, self.v
 
-        f, rho, u, v = self.f, self.rho, self.u, self.v
-        
-        for it in tqdm(range(num_steps)):
+        for it in tqdm(range(steps)):
             f, rho, u, v = self.step(f, rho, u, v)
-        
-            if it % save_step == 0:
-                filename = f'{output_dir}/{it:07d}.dat'
-                
-                with open(filename, 'wb') as fp:
-                    pickle.dump((np.array(self.x), np.array(self.y), np.array(u), np.array(v), np.array(rho)), fp)
-        
-        self.f, self.rho, self.u, self.v = f, rho, u, v
-        return rho, u, v
+            if it % save == 0:
+                jnp.save(f'{dir}/{it:07d}.npy', jnp.stack([jnp.array(u), jnp.array(v), jnp.array(rho)]))
+
+        self.f, self.density, self.u, self.v = f, rho, u, v
 
 if __name__ == '__main__':
-    lbm = LMB(nx=100, ny=100, tau=1.0, u0=0.1)
-    lbm.run(num_steps=5000, save_step=10, output_dir='./data2')
-    
-    print('Done')
+    start = time.perf_counter()
+
+    nx = 100
+    ny = 100
+
+    reynolds = 100
+    velocity = 0.01
+
+    sim = LBM(nx, ny, u0 = velocity, tau = velocity * nx / velocity)
+    sim.run(10000, 10, './data6')
+
+    print(f'Done ({(time.perf_counter() - start):.3f}s)')
